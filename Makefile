@@ -8,7 +8,7 @@ EXAMPLES		  = $(EXAMPLE_SRCS:$(EG_DIR)/%.cpp=%)
 BINS          = $(EXAMPLE_SRCS:$(EG_DIR)/%.cpp=$(BUILD_DIR)/%)
 
 CXX			  = g++
-CXXFLAGS := -I$(INC_DIR) -std=c++26 -freflection -Wall -Wextra -Wpedantic
+CXXFLAGS := -I$(INC_DIR) -std=c++26 -freflection -Wall -Wextra -Wpedantic -O2
 
 all: $(BINS)
 
