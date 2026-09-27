@@ -66,6 +66,10 @@ struct GetterWrapper {
       })};
 
   consteval { std::meta::define_aggregate(^^Inner, members_v); }
+
+  static_assert(std::meta::is_standard_layout_type(^^Inner),
+                "Type must be standard layout");
+  static_assert(members_v.size() == 1, "There should be exactly one member");
 };
 
 template <typename Derived, std::meta::info Member>
@@ -83,6 +87,10 @@ struct SetterWrapper {
       })};
 
   consteval { std::meta::define_aggregate(^^Inner, members_v); }
+
+  static_assert(std::meta::is_standard_layout_type(^^Inner),
+                "Type must be standard layout");
+  static_assert(members_v.size() == 1, "There should be exactly one member");
 };
 
 }  // namespace detail
