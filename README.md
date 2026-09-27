@@ -117,6 +117,7 @@ Though [c++26 reflection](https://isocpp.org/files/papers/P2996R4.html) gives us
 - [ ] Static members support
 - [ ] Annotate on members to control accessibility
 - [ ] Name normalization
+- [ ] Transparent method call
 
 ## Reference
 
