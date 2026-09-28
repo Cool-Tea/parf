@@ -66,6 +66,9 @@ constexpr Access Ignore{.get = false, .set = false};
 
 namespace detail {
 
+constexpr auto empty_array = std::array<std::meta::info, 0>{};
+using empty_seq = decltype(std::make_index_sequence<0>{});
+
 template <std::meta::info Info>
 consteval auto dealias() {
   auto underlying = Info;
@@ -115,10 +118,11 @@ consteval auto nsdm_of() {
 
 template <std::meta::info Info>
 consteval auto gnsdm_of() {
+  constexpr auto underlying = dealias<Info>();
   constexpr auto scope =
-      fetch_mono_annotation<Info, Scope>().value_or(AllScope);
+      fetch_mono_annotation<underlying, Scope>().value_or(AllScope);
   [[maybe_unused]] constexpr auto default_access =
-      fetch_mono_annotation<Info, Access>().value_or(All);
+      fetch_mono_annotation<underlying, Access>().value_or(All);
 
   constexpr auto members = std::define_static_array([&]() consteval {
     std::vector<std::meta::info> members{};
@@ -142,17 +146,22 @@ consteval auto gnsdm_of() {
     }
     return members;
   }());
-  return []<std::size_t... I>(const auto& v, std::index_sequence<I...>) {
-    return std::array{v[I]...};
-  }(members, std::make_index_sequence<members.size()>{});
+  if constexpr (members.size() == 0) {
+    return std::array<std::meta::info, 0>{};
+  } else {
+    return []<std::size_t... I>(const auto& v, std::index_sequence<I...>) {
+      return std::array{v[I]...};
+    }(members, std::make_index_sequence<members.size()>{});
+  }
 }
 
 template <std::meta::info Info>
 consteval auto snsdm_of() {
+  constexpr auto underlying = dealias<Info>();
   constexpr auto scope =
-      fetch_mono_annotation<Info, Scope>().value_or(AllScope);
+      fetch_mono_annotation<underlying, Scope>().value_or(AllScope);
   [[maybe_unused]] constexpr auto default_access =
-      fetch_mono_annotation<Info, Access>().value_or(All);
+      fetch_mono_annotation<underlying, Access>().value_or(All);
 
   constexpr auto members = std::define_static_array([&]() consteval {
     std::vector<std::meta::info> members{};
@@ -176,9 +185,13 @@ consteval auto snsdm_of() {
     }
     return members;
   }());
-  return []<std::size_t... I>(const auto& v, std::index_sequence<I...>) {
-    return std::array{v[I]...};
-  }(members, std::make_index_sequence<members.size()>{});
+  if constexpr (members.size() == 0) {
+    return std::array<std::meta::info, 0>{};
+  } else {
+    return []<std::size_t... I>(const auto& v, std::index_sequence<I...>) {
+      return std::array{v[I]...};
+    }(members, std::make_index_sequence<members.size()>{});
+  }
 }
 
 template <typename Owner, typename Derived, std::meta::info Member>
