@@ -66,9 +66,6 @@ constexpr Access Ignore{.get = false, .set = false};
 
 namespace detail {
 
-constexpr auto empty_array = std::array<std::meta::info, 0>{};
-using empty_seq = decltype(std::make_index_sequence<0>{});
-
 template <std::meta::info Info>
 consteval auto dealias() {
   auto underlying = Info;
