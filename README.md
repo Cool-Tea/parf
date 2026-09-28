@@ -3,18 +3,27 @@
 **parf** is a single-header C++26 library that looks at any struct's non-static data members and synthesizes `get_<member>()` / `set_<member>()` methods for all of them — zero macros, zero boilerplate, zero runtime cost. The compiler does the typing so you don't have to.
 
 ```cpp
-struct Person {
-  Person(std::string name, int age) : name(std::move(name)), age(age) {}
+class [[
+  = parf::Scope{.pub = true, .prot = true, .priv = false},  // class-wide default
+  = parf::Access{.get = true, .set = true}
+]] Person {
+ public:
+  std::string name{"Alice"};
+
+  [[= parf::SetOnly]] int age{32};                // set_age only
+ protected:
+  [[= parf::All]] std::string email{"alice@example.com"};   // already in Scope; All is explicit
  private:
-  std::string name;  // private, and we still get a getter/setter
-  int age;
+  [[= parf::Ignore]]  std::string password{"secret"};       // no accessors
+  [[= parf::GetOnly]] Person* crush{nullptr};                // get_crush only
 };
 
-Person person{"Alice", 30};
-auto accessor = parf::make_accessor(person);
-
-accessor.get_name();          // "Alice"
-accessor.set_age(31);         // boom, mutated in place
+auto bob = parf::make_accessor(Person{});
+bob.set_name("Bob");        // ok — public
+bob.set_age(25);            // ok — SetOnly
+bob.set_email("bob@example.com");  // ok — protected members are in Scope
+bob.get_crush();            // ok — member annotation beats Scope.priv = false
+// bob.set_password("hunter2");   // compile-time error — Ignore
 ```
 
 That's it. No `#define PROPERTY`, no codegen step, no `.proto`, no regret.
@@ -78,42 +87,17 @@ ref.set_age(99);        // person.age == 99
 owned.set_age(2);       // only the copy changes
 ```
 
-### Poking the raw object
+### Access control with annotations
 
-Every wrapper is a *wrapper*. When reflection isn't enough, `unwrap()` hands you back
-the object:
-
-```cpp
-parf::Getter<Person> g = ...;
-Person& p = g.unwrap();
-```
-
-## Access control with annotations
-
-By default parf exposes **every** non-static data member, including `private` ones. You can claw that back with two reflection-friendly annotations: a per-class `Scope` and a per-member `Access`.
+By default parf exposes **every** non-static data member, including `private` ones. Two reflection-friendly annotations let you claw that back: a per-class `Scope` and a per-member `Access`.
 
 ```cpp
-class [[
-  = parf::Scope{.pub = true, .prot = true, .priv = false},  // class-wide default
-  = parf::Access{.get = true, .set = true}
-]] Person {
- public:
-  std::string name{"Alice"};
-
-  [[= parf::SetOnly]] int age{32};                // set_age only
- protected:
-  [[= parf::All]] std::string email{"alice@example.com"};   // already in Scope; All is explicit
- private:
-  [[= parf::Ignore]]  std::string password{"secret"};       // no accessors
-  [[= parf::GetOnly]] Person* crush{nullptr};                // get_crush only
+struct Widget {
+  [[= parf::All]]     int both;      // get_both() + set_both()
+  [[= parf::GetOnly]] int readable;  // get_readable() only
+  [[= parf::SetOnly]] int writable;  // set_writable() only
+  [[= parf::Ignore]]  int hidden;    // neither
 };
-
-auto bob = parf::make_accessor(Person{});
-bob.set_name("Bob");        // ok — public
-bob.set_age(25);            // ok — SetOnly
-bob.set_email("bob@example.com");  // ok — protected members are in Scope
-bob.get_crush();            // ok — member annotation beats Scope.priv = false
-// bob.set_password("hunter2");   // compile-time error — Ignore
 ```
 
 Two little value types drive everything:
@@ -125,9 +109,21 @@ Two little value types drive everything:
 
 Rules of the game:
 
-- A member-level `Access` annotation **wins over** the class-level `Scope`: annotate a member and it is included regardless of its `public` / `protected` / `private` level.
+- A member-level `Access` annotation **wins over** the class-level `Scope`: annotate a member and it is included regardless of its `public` / `protected` / `private` level (see the `crush` field in the opening example).
 - Without a class `Scope`, the default is `AllScope` — private members included.
 - A class with more than one `Scope`, or a member with more than one `Access`, is a hard compile-time error (enforced by a `static_assert` with a generated message).
+
+Annotations are resolved against the *dealiased* type, so they keep working when the reflection arrives through an alias such as `std::remove_cvref_t<T>` inside `make_*`.
+
+### Poking the raw object
+
+Every wrapper is a *wrapper*. When reflection isn't enough, `unwrap()` hands you back
+the object:
+
+```cpp
+parf::Getter<Person> g = ...;
+Person& p = g.unwrap();
+```
 
 ## How the sausage is made
 
