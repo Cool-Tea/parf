@@ -34,8 +34,9 @@ cp -r include/parf /path/to/your/project/include/
 Then build the bundled example:
 
 ```bash
-make        # builds all examples
-make basic  # build example/basic.cpp
+make            # builds all examples
+make basic      # build example/basic.cpp
+make annotation # build example/annotation.cpp
 ```
 
 Run one of the examples and you will get:
@@ -87,9 +88,50 @@ parf::Getter<Person> g = ...;
 Person& p = g.unwrap();
 ```
 
+## Access control with annotations
+
+By default parf exposes **every** non-static data member, including `private` ones. You can claw that back with two reflection-friendly annotations: a per-class `Scope` and a per-member `Access`.
+
+```cpp
+class [[
+  = parf::Scope{.pub = true, .prot = true, .priv = false},  // class-wide default
+  = parf::Access{.get = true, .set = true}
+]] Person {
+ public:
+  std::string name{"Alice"};
+
+  [[= parf::SetOnly]] int age{32};                // set_age only
+ protected:
+  [[= parf::All]] std::string email{"alice@example.com"};   // already in Scope; All is explicit
+ private:
+  [[= parf::Ignore]]  std::string password{"secret"};       // no accessors
+  [[= parf::GetOnly]] Person* crush{nullptr};                // get_crush only
+};
+
+auto bob = parf::make_accessor(Person{});
+bob.set_name("Bob");        // ok — public
+bob.set_age(25);            // ok — SetOnly
+bob.set_email("bob@example.com");  // ok — protected members are in Scope
+bob.get_crush();            // ok — member annotation beats Scope.priv = false
+// bob.set_password("hunter2");   // compile-time error — Ignore
+```
+
+Two little value types drive everything:
+
+| Annotation                                            | Constants                                                | Meaning                                         |
+| ----------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------- |
+| `parf::Access{bool get, bool set}` (member)           | `All`, `GetOnly`, `SetOnly`, `Ignore`                    | which accessors to synthesize for that member   |
+| `parf::Scope{bool pub, bool prot, bool priv}` (class) | `AllScope`, `PublicOnly`, `ProtectedOnly`, `PrivateOnly` | which C++ access levels are included by default |
+
+Rules of the game:
+
+- A member-level `Access` annotation **wins over** the class-level `Scope`: annotate a member and it is included regardless of its `public` / `protected` / `private` level.
+- Without a class `Scope`, the default is `AllScope` — private members included.
+- A class with more than one `Scope`, or a member with more than one `Access`, is a hard compile-time error (enforced by a `static_assert` with a generated message).
+
 ## How the sausage is made
 
-Though [c++26 reflection](https://isocpp.org/files/papers/P2996R4.html) gives us the power of doing static reflection, currently there are no ways of injecting methods into class or defining class with method. Therefore, `parf.hpp` does some tricks based on [non-intrusive interface](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/p4374r0.html#member-function-injection):
+Though [C++26 reflection](https://isocpp.org/files/papers/P2996R4.html) gives us the power of doing static reflection, currently there are no ways of injecting methods into class or defining class with method. Therefore, `parf.hpp` does some tricks based on [non-intrusive interface](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/p4374r0.html#member-function-injection):
 
 1. **Compile-time strings:** `ConstString<N>` is a `consteval` string type so member names like `"get_name"` can be built with `operator+` and handed to reflection *at compile time*. `id_of<Member>()` turns a reflected member into one.
 
@@ -99,27 +141,24 @@ Though [c++26 reflection](https://isocpp.org/files/papers/P2996R4.html) gives us
 
 4. **Multiple inheritance + a base-pointer backflip:** The outer wrapper inherits one such base per member. Each base's `operator()` does `reinterpret_cast<Outer*>(this)` (valid because the bases are standard-layout and live at offset 0), then reaches the owning object via `unwrap()`. All of it folds to direct member access in the optimizer.
 
+5. **Access-control filtering:** Before any synthesis, `gnsdm_of` / `snsdm_of` dealias the reflected type, read the class `Scope` and per-member `Access` annotations, and keep only the members that pass. `fetch_mono_annotation<Info, A>` pulls the (at most one) annotation of type `A` off a reflection; `id_of` + `ConstString` build readable `static_assert` messages when you over-annotate, and a list that filters down to nothing degrades to a zero-length `std::array` instead of blowing up template argument deduction.
+
 ## Limitations / sharp edges
 
-- **Non-static data members only.** No static members, no bases, no functions. This is a
-  field-access generator, not a serialization framework.
-- **Members must be named.** `identifier_of` is what we stringify; anonymous members
-  need not apply.
-- **Heavy reflection metaprogramming.** Compile times scale with member count, and error
-  messages from `define_aggregate` are… an acquired taste.
-- **Private access is deliberate.** `access_context::unchecked()` bypasses access
-  control. If you don't want that, don't ship it to people who'll abuse it. (Too late.)
-- **Standard-layout assumptions.** The reinterpret-cast trick relies on the synthesized
-  bases sitting at offset 0. Non-standard-layout types will bite you.
+- **Non-static data members only.** No static members, no bases, no functions. This is a field-access generator, not a serialization framework.
+- **Members must be named.** `identifier_of` is what we stringify; anonymous members need not apply.
+- **Heavy reflection metaprogramming.** Compile times scale with member count, and error messages from `define_aggregate` are… an acquired taste.
+- **Private access is on by default.** Enumeration uses `access_context::unchecked()`, and the default `AllScope` includes `private` members, so nothing is hidden unless you say so. Use [`parf::Scope` / `parf::Access`](#access-control-with-annotations) to restrict it.
+- **Standard-layout assumptions.** The reinterpret-cast trick relies on the synthesized bases sitting at offset 0. Non-standard-layout types will bite you.
 
 ## Roadmap
 
 - [ ] Static members support
-- [ ] Annotate on members to control accessibility
+- [x] Annotations to control accessibility
 - [ ] Name normalization
 - [ ] Transparent method call
 
 ## Reference
 
-- c++26 reflection: https://isocpp.org/files/papers/P2996R4.html
+- C++26 reflection: https://isocpp.org/files/papers/P2996R4.html
 - non-intrusive interface: https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/p4374r0.html
