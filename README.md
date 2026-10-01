@@ -46,6 +46,7 @@ Then build the bundled example:
 make            # builds all examples
 make basic      # build example/basic.cpp
 make annotation # build example/annotation.cpp
+make style      # build example/style.cpp
 ```
 
 Run one of the examples and you will get:
@@ -115,6 +116,53 @@ Rules of the game:
 
 Annotations are resolved against the *dealiased* type, so they keep working when the reflection arrives through an alias such as `std::remove_cvref_t<T>` inside `make_*`.
 
+### Name normalization
+
+Generated names aren't frozen to `get_<raw member>`. By default parf sniffs each member's own spelling, trims leading/trailing `_` and a leading `m_`, then spells the accessor in the *same* convention:
+
+```cpp
+struct Profile {
+  int user_name;    // get_user_name()
+  int PascalField;  // GetPascalField()
+  int camelField;   // getCamelField()
+  int m_prefixed;   // get_prefixed()  — m_ trimmed
+  int _lead;        // get_lead()      — leading _ trimmed
+};
+```
+
+Override the convention per class, or per member, with a `NamingConvention` annotation (member beats class):
+
+```cpp
+struct [[= parf::CamelCase]] Player {   // class-wide default
+  int _id;               // getId / setId
+  int Health;            // getHealth / setHealth
+  std::string m_name;    // getName / setName
+};
+
+struct [[= parf::SnakeCase]] Enemy {
+  [[= parf::PascalCase]] int _id;              // GetId / SetId
+  [[= parf::NoNormalize]] std::string m_name;  // get_m_name / set_m_name
+};
+```
+
+Need an exact name? `RenameGetter` / `RenameSetter` take a verbatim string and skip normalization entirely:
+
+```cpp
+struct Monster {
+  [[= parf::RenameGetter{"Health"},
+     = parf::RenameSetter{"set_h"}]] int health;  // Health() / set_h()
+};
+```
+
+| Convention    | `m_user_name` becomes                 |
+| ------------- | ------------------------------------- |
+| `NoNormalize` | `get_m_user_name` / `set_m_user_name` |
+| `SnakeCase`   | `get_user_name` / `set_user_name`     |
+| `CamelCase`   | `getUserName` / `setUserName`         |
+| `PascalCase`  | `GetUserName` / `SetUserName`         |
+
+With no annotation anywhere, the convention is guessed from the member: leading uppercase → `PascalCase`; an internal `_` → `SnakeCase`; an internal uppercase → `CamelCase`; otherwise `SnakeCase`. `NoNormalize` keeps the raw identifier but still picks the prefix from the guessed convention.
+
 ### Poking the raw object
 
 Every wrapper is a *wrapper*. When reflection isn't enough, `unwrap()` hands you back
@@ -139,19 +187,23 @@ Though [C++26 reflection](https://isocpp.org/files/papers/P2996R4.html) gives us
 
 5. **Access-control filtering:** Before any synthesis, `gnsdm_of` / `snsdm_of` dealias the reflected type, read the class `Scope` and per-member `Access` annotations, and keep only the members that pass. `fetch_mono_annotation<Info, A>` pulls the (at most one) annotation of type `A` off a reflection; `id_of` + `ConstString` build readable `static_assert` messages when you over-annotate, and a list that filters down to nothing degrades to a zero-length `std::array` instead of blowing up template argument deduction.
 
+6. **Name normalization:** `getter_id_of` / `setter_id_of` resolve the final accessor name: detect the member's convention (`convention_of`), apply the class default then a member override, check for a `RenameGetter` / `RenameSetter` *template* annotation (matched by `template_of` through `annotations_of_with_template_type`), and otherwise build `prefix + normalize_id(...)`. Everything runs on `ConstString`, so the whole name is a compile-time constant.
+
 ## Limitations / sharp edges
 
 - **Non-static data members only.** No static members, no bases, no functions. This is a field-access generator, not a serialization framework.
 - **Members must be named.** `identifier_of` is what we stringify; anonymous members need not apply.
 - **Heavy reflection metaprogramming.** Compile times scale with member count, and error messages from `define_aggregate` are… an acquired taste.
 - **Private access is on by default.** Enumeration uses `access_context::unchecked()`, and the default `AllScope` includes `private` members, so nothing is hidden unless you say so. Use [`parf::Scope` / `parf::Access`](#access-control-with-annotations) to restrict it.
+- **ASCII-only naming.** Case detection and conversion only understand `A`–`Z` / `a`–`z`; anything else is passed through untouched.
+- **Name collisions aren't diagnosed.** Two members that normalize to the same accessor name produce an ambiguous member; you only find out when you call it.
 - **Standard-layout assumptions.** The reinterpret-cast trick relies on the synthesized bases sitting at offset 0. Non-standard-layout types will bite you.
 
 ## Roadmap
 
 - [ ] Static members support
 - [x] Annotations to control accessibility
-- [ ] Name normalization
+- [x] Name normalization
 - [ ] Transparent method call
 
 ## Reference
