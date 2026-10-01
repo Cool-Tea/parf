@@ -12,7 +12,9 @@ namespace parf {
 template <std::size_t N>
 struct ConstString {
   char __data[N];
+  std::size_t __size = N - 1;
 
+  consteval ConstString() = default;
   consteval explicit ConstString(const char (&str)[N]) {
     std::copy_n(str, N, __data);
   }
@@ -20,27 +22,88 @@ struct ConstString {
     std::copy_n(arr.data(), N - 1, __data);
     __data[N - 1] = '\0';
   }
+
   consteval const char* data() const { return __data; }
-  consteval std::size_t size() const { return N - 1; }
+  consteval std::size_t size() const { return __size; }
   consteval const char* c_str() const { return __data; }
   consteval std::string_view view() const {
-    return std::string_view(__data, size());
+    return std::string_view(__data, __size);
   }
   consteval operator const char*() const { return __data; }
   consteval operator std::string_view() const { return view(); }
 
   consteval auto begin() const { return __data; }
-  consteval auto end() const { return __data + size(); }
+  consteval auto end() const { return __data + __size; }
   consteval char operator[](std::size_t index) const { return __data[index]; }
+
+  consteval ConstString substr(std::size_t pos, std::size_t len) const {
+    std::size_t start = pos;
+    std::size_t end = pos + len;
+    ConstString res{};
+    std::copy_n(__data + start, end - start, res.__data);
+    res.__size = end - start;
+    return res;
+  }
+
+  consteval ConstString trim(char ch) const {
+    std::size_t start = 0;
+    std::size_t end = __size;
+    while (start < end && __data[start] == ch) {
+      ++start;
+    }
+    while (end > start && __data[end - 1] == ch) {
+      --end;
+    }
+    ConstString res{};
+    std::copy_n(__data + start, end - start, res.__data);
+    res.__size = end - start;
+    return res;
+  }
+
+  template <std::size_t M>
+  consteval ConstString trim(const char (&str)[M]) const {
+    return trim(ConstString<M>{str});
+  }
+
+  template <std::size_t M>
+  consteval ConstString trim(ConstString<M> str) const {
+    std::size_t start = 0;
+    std::size_t end = __size;
+    while (start + str.size() <= __size && substr(start, str.size()) == str) {
+      start += str.size();
+    }
+    while (end >= str.size() && substr(end - str.size(), str.size()) == str) {
+      end -= str.size();
+    }
+    ConstString res{};
+    std::copy_n(__data + start, end - start, res.__data);
+    res.__size = end - start;
+    return res;
+  }
 };
 
-template <std::size_t P, std::size_t Q>
-consteval ConstString<P + Q - 1> operator+(const ConstString<P>& lhs,
-                                           const ConstString<Q>& rhs) {
-  char result[P + Q - 1] = {};
-  std::copy_n(lhs.__data, lhs.size(), result);
-  std::copy_n(rhs.__data, rhs.size(), result + lhs.size());
-  return ConstString(result);
+template <std::size_t N, std::size_t M>
+consteval ConstString<N + M - 1> operator+(const ConstString<N>& lhs,
+                                           const ConstString<M>& rhs) {
+  ConstString<N + M - 1> result{};
+  std::copy_n(lhs.__data, lhs.size(), result.__data);
+  std::copy_n(rhs.__data, rhs.size(), result.__data + lhs.size());
+  result.__size = lhs.size() + rhs.size();
+  return result;
+}
+
+template <std::size_t N, std::size_t M>
+consteval bool operator==(const ConstString<N>& lhs,
+                          const ConstString<M>& rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < lhs.size(); ++i) {
+    if (lhs[i] != rhs[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 struct Scope {
@@ -63,6 +126,30 @@ constexpr Access All{.get = true, .set = true};
 constexpr Access GetOnly{.get = true, .set = false};
 constexpr Access SetOnly{.get = false, .set = true};
 constexpr Access Ignore{.get = false, .set = false};
+
+enum class NamingConvention {
+  NoNormalize,
+  CamelCase,
+  PascalCase,
+  SnakeCase,
+};
+
+constexpr NamingConvention NoNormalize = NamingConvention::NoNormalize;
+constexpr NamingConvention CamelCase = NamingConvention::CamelCase;
+constexpr NamingConvention PascalCase = NamingConvention::PascalCase;
+constexpr NamingConvention SnakeCase = NamingConvention::SnakeCase;
+
+template <std::size_t N>
+struct RenameGetter {
+  ConstString<N> name;
+  consteval RenameGetter(const char (&str)[N]) : name(str) {}
+};
+
+template <std::size_t N>
+struct RenameSetter {
+  ConstString<N> name;
+  consteval RenameSetter(const char (&str)[N]) : name(str) {}
+};
 
 namespace detail {
 
@@ -98,13 +185,210 @@ consteval auto fetch_mono_annotation() -> std::optional<A> {
       annos.size() <= 1,
       (ConstString{"There should be at most one annotation of "} +
        id_of<^^A>() + ConstString{" on '"} + id_of<Info>() + ConstString{"'"}));
-  for (auto anno : std::meta::annotations_of_with_type(Info, ^^A)) {
+  for (auto anno : annos) {
     if (std::meta::remove_cvref(std::meta::type_of(anno)) ==
         std::meta::remove_cvref(^^A)) {
       return std::meta::extract<A>(anno);
     }
   }
   return {};
+}
+
+template <std::meta::info Info, std::meta::info Template>
+consteval auto annotations_of_with_template_type()
+    -> std::vector<std::meta::info> {
+  constexpr auto annos =
+      std::define_static_array(std::meta::annotations_of(Info));
+  std::vector<std::meta::info> result;
+  for (auto anno : annos) {
+    auto anno_type = std::meta::remove_cvref(std::meta::type_of(anno));
+    if (std::meta::has_template_arguments(anno_type) &&
+        std::meta::template_of(anno_type) == Template) {
+      result.push_back(anno);
+    }
+  }
+  return result;
+}
+
+template <std::meta::info Info, std::meta::info Template>
+consteval auto fetch_mono_template_annotation()
+    -> std::optional<std::meta::info> {
+  constexpr auto annos = std::define_static_array(
+      annotations_of_with_template_type<Info, Template>());
+  static_assert(annos.size() <= 1,
+                (ConstString{"There should be at most one annotation of "} +
+                 id_of<Template>() + ConstString{" on '"} + id_of<Info>() +
+                 ConstString{"'"}));
+  if constexpr (!annos.empty()) {
+    return annos[0];
+  } else {
+    return {};
+  }
+}
+
+consteval bool is_upper(char ch) { return ch >= 'A' && ch <= 'Z'; }
+consteval bool is_lower(char ch) { return ch >= 'a' && ch <= 'z'; }
+consteval char to_upper(char ch) { return is_lower(ch) ? ch - 'a' + 'A' : ch; }
+consteval char to_lower(char ch) { return is_upper(ch) ? ch - 'A' + 'a' : ch; }
+
+template <NamingConvention Conv, ConstString Str>
+consteval std::size_t normalized_length() {
+  if constexpr (Conv == NoNormalize) {
+    return Str.size();
+  } else if constexpr (Conv == CamelCase || Conv == PascalCase) {
+    std::size_t length = 0;
+    for (std::size_t i = 0; i < Str.size(); ++i) {
+      char ch = Str[i];
+      if (ch == '_') continue;
+      else ++length;
+    }
+    return length;
+  } else {
+    std::size_t length = 0;
+    for (std::size_t i = 0; i < Str.size(); ++i) {
+      char ch = Str[i];
+      if (i > 0 && is_upper(ch)) {
+        ++length;
+      }
+      ++length;
+    }
+    return length;
+  }
+}
+
+template <NamingConvention Conv, ConstString Str>
+consteval decltype(auto) normalize_id() {
+  if constexpr (Conv == NoNormalize) {
+    return Str;
+  } else {
+    constexpr auto trimmed = Str.trim('_').trim("m_");
+    static_assert(trimmed.size() > 0,
+                  "Identifier cannot be empty after trimming");
+    constexpr std::size_t len = normalized_length<Conv, trimmed>();
+    ConstString<len + 1> normalized{};
+    if constexpr (Conv == CamelCase || Conv == PascalCase) {
+      bool capitalize_next = true;
+      for (std::size_t i = 0, j = 0; i < trimmed.size(); ++i) {
+        char ch = trimmed[i];
+        if (ch == '_') {
+          capitalize_next = true;
+          continue;
+        }
+        if (capitalize_next) {
+          normalized.__data[j++] = to_upper(ch);
+          capitalize_next = false;
+        } else {
+          normalized.__data[j++] = ch;
+        }
+      }
+    } else {
+      for (std::size_t i = 0, j = 0; i < trimmed.size(); ++i) {
+        char ch = trimmed[i];
+        if (i > 0 && is_upper(ch)) {
+          normalized.__data[j++] = '_';
+        }
+        normalized.__data[j++] = to_lower(ch);
+      }
+    }
+    normalized.__size = len;
+    return normalized;
+  }
+}
+
+template <std::meta::info Info>
+consteval NamingConvention convention_of() {
+  constexpr auto id = id_of<Info>().trim('_').trim("m_");
+  static_assert(id.size() > 0, "Identifier cannot be empty after trimming");
+  if constexpr (is_upper(id[0])) {
+    return PascalCase;
+  } else {
+    for (std::size_t i = 0; i < id.size(); ++i) {
+      char ch = id[i];
+      if (ch == '_') {
+        return SnakeCase;
+      }
+      if (i > 0 && is_upper(ch)) {
+        return CamelCase;
+      }
+    }
+    return SnakeCase;
+  }
+}
+
+template <std::meta::info Info>
+consteval decltype(auto) getter_id_of() {
+  constexpr auto parent = std::meta::parent_of(Info);
+  static_assert(std::meta::is_class_type(parent),
+                "Info must be a data member of a class");
+  constexpr auto id_conv = convention_of<Info>();
+  constexpr auto parent_conv =
+      fetch_mono_annotation<parent, NamingConvention>().value_or(id_conv);
+  constexpr auto conv =
+      fetch_mono_annotation<Info, NamingConvention>().value_or(parent_conv);
+  constexpr auto rename =
+      fetch_mono_template_annotation<Info, ^^RenameGetter>();
+  if constexpr (rename.has_value()) {
+    constexpr auto r = rename.value();
+    constexpr auto rename_type = std::meta::remove_cvref(std::meta::type_of(r));
+    using Type = [:rename_type:];
+    constexpr auto name = std::meta::extract<Type>(r).name;
+    return name;
+  } else {
+    constexpr auto id = id_of<Info>();
+    constexpr auto prefix_conv = conv == NoNormalize ? id_conv : conv;
+    constexpr auto prefix = [id, prefix_conv]() {
+      if constexpr (prefix_conv == CamelCase) {
+        return ConstString{"get"};
+      } else if constexpr (prefix_conv == PascalCase) {
+        return ConstString{"Get"};
+      } else if constexpr (prefix_conv == SnakeCase) {
+        return ConstString{"get_"};
+      } else {
+        static_assert(false, (ConstString{"Unknown naming convention of '"} +
+                              id + ConstString{"'"}));
+      }
+    }();
+    constexpr auto normalized_id = normalize_id<conv, id>();
+    return prefix + normalized_id;
+  }
+}
+
+template <std::meta::info Info>
+consteval decltype(auto) setter_id_of() {
+  constexpr auto parent = std::meta::parent_of(Info);
+  static_assert(std::meta::is_class_type(parent),
+                "Info must be a data member of a class");
+  constexpr auto id_conv = convention_of<Info>();
+  constexpr auto parent_conv =
+      fetch_mono_annotation<parent, NamingConvention>().value_or(id_conv);
+  constexpr auto conv =
+      fetch_mono_annotation<Info, NamingConvention>().value_or(parent_conv);
+  constexpr auto rename =
+      fetch_mono_template_annotation<Info, ^^RenameSetter>();
+  if constexpr (rename.has_value()) {
+    constexpr auto r = rename.value();
+    constexpr auto rename_type = std::meta::remove_cvref(std::meta::type_of(r));
+    using Type = [:rename_type:];
+    constexpr auto name = std::meta::extract<Type>(r).name;
+    return name;
+  } else {
+    constexpr auto id = id_of<Info>();
+    constexpr auto prefix_conv = conv == NoNormalize ? id_conv : conv;
+    constexpr auto prefix = [id, prefix_conv]() {
+      if constexpr (prefix_conv == CamelCase) {
+        return ConstString{"set"};
+      } else if constexpr (prefix_conv == PascalCase) {
+        return ConstString{"Set"};
+      } else if constexpr (prefix_conv == SnakeCase) {
+        return ConstString{"set_"};
+      } else {
+        static_assert(false, (ConstString{"Unknown naming convention of '"} +
+                              id + ConstString{"'"}));
+      }
+    }();
+    constexpr auto normalized_id = normalize_id<conv, id>();
+    return prefix + normalized_id;
+  }
 }
 
 template <std::meta::info Info>
@@ -219,7 +503,7 @@ struct GetterWrapper {
           {
               ^^Inner, ^^Derived, std::meta::reflect_constant(Member)}),
       {
-          .name = ConstString{"get_"} + id_of<Member>(),
+          .name = getter_id_of<Member>(),
           .no_unique_address = true,
       })};
 
@@ -240,7 +524,7 @@ struct SetterWrapper {
           {
               ^^Inner, ^^Derived, std::meta::reflect_constant(Member)}),
       {
-          .name = ConstString{"set_"} + id_of<Member>(),
+          .name = setter_id_of<Member>(),
           .no_unique_address = true,
       })};
 
