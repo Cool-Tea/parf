@@ -14,7 +14,7 @@ all: $(BINS)
 
 $(EXAMPLES): %: $(BUILD_DIR)/%
 
-$(BUILD_DIR)/%: $(EG_DIR)/%.cpp
+$(BUILD_DIR)/%: $(EG_DIR)/%.cpp $(INC_DIR)/parf/parf.hpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $< -o $@
 
