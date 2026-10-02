@@ -195,11 +195,9 @@ consteval auto fetch_mono_annotation() -> std::optional<A> {
 }
 
 template <std::meta::info Info, std::meta::info Template>
-consteval auto annotations_of_with_template_type()
-    -> std::vector<std::meta::info> {
-  constexpr auto annos =
-      std::define_static_array(std::meta::annotations_of(Info));
-  std::vector<std::meta::info> result;
+consteval auto annotations_of_with_template_type() {
+  auto annos = std::meta::annotations_of(Info);
+  std::vector<std::meta::info> result{};
   for (auto anno : annos) {
     auto anno_type = std::meta::remove_cvref(std::meta::type_of(anno));
     if (std::meta::has_template_arguments(anno_type) &&
