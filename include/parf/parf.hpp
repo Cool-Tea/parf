@@ -535,17 +535,224 @@ struct SetterWrapper {
   static_assert(members_v.size() == 1, "There should be exactly one member");
 };
 
+struct Qualifier {
+  bool is_const : 1;
+  bool is_volatile : 1;
+  bool is_noexcept : 1;
+};
+
+consteval bool operator==(const Qualifier& lhs, const Qualifier& rhs) {
+  return lhs.is_const == rhs.is_const && lhs.is_volatile == rhs.is_volatile &&
+         lhs.is_noexcept == rhs.is_noexcept;
+}
+
+constexpr Qualifier NoQualifier{
+    .is_const = false, .is_volatile = false, .is_noexcept = false};
+constexpr Qualifier ConstQualifier{
+    .is_const = true, .is_volatile = false, .is_noexcept = false};
+constexpr Qualifier VolatileQualifier{
+    .is_const = false, .is_volatile = true, .is_noexcept = false};
+constexpr Qualifier NoexceptQualifier{
+    .is_const = false, .is_volatile = false, .is_noexcept = true};
+constexpr Qualifier ConstVolatileQualifier{
+    .is_const = true, .is_volatile = true, .is_noexcept = false};
+constexpr Qualifier ConstNoexceptQualifier{
+    .is_const = true, .is_volatile = false, .is_noexcept = true};
+constexpr Qualifier VolatileNoexceptQualifier{
+    .is_const = false, .is_volatile = true, .is_noexcept = true};
+constexpr Qualifier ConstVolatileNoexceptQualifier{
+    .is_const = true, .is_volatile = true, .is_noexcept = true};
+
+template <std::meta::info Member>
+consteval auto qualifier_of() {
+  return Qualifier{.is_const = std::meta::is_const(Member),
+                   .is_volatile = std::meta::is_volatile(Member),
+                   .is_noexcept = std::meta::is_noexcept(Member)};
+}
+
+template <std::meta::info Member>
+consteval auto parameter_types_of() {
+  auto params = std::meta::parameters_of(Member);
+  std::vector<std::meta::info> param_types{};
+  for (auto param : params) {
+    auto param_type = std::meta::type_of(param);
+    if (std::meta::is_const(param)) {
+      param_type = std::meta::add_const(param_type);
+    }
+    if (std::meta::is_volatile(param)) {
+      param_type = std::meta::add_volatile(param_type);
+    }
+    param_types.push_back(param_type);
+  }
+  return param_types;
+}
+
+template <std::meta::info Info>
+consteval auto members_of() {
+  constexpr auto underlying = dealias<Info>();
+  return std::define_static_array(
+      std::meta::members_of(underlying, std::meta::access_context::current()));
+}
+
+template <std::meta::info Info>
+consteval auto methods_of() {
+  constexpr auto methods = std::define_static_array([]() consteval {
+    std::vector<std::meta::info> result{};
+    for (auto member : members_of<Info>()) {
+      if (std::meta::is_function(member) &&
+          !std::meta::is_special_member_function(member) &&
+          !std::meta::is_constructor(member) &&
+          !std::meta::is_conversion_function(member) &&
+          !std::meta::is_operator_function(member) &&
+          !std::meta::is_literal_operator(member)) {
+        result.push_back(member);
+      }
+    }
+    return result;
+  }());
+  if constexpr (methods.size() == 0) {
+    return std::array<std::meta::info, 0>{};
+  } else {
+    return []<std::size_t... I>(const auto& v, std::index_sequence<I...>) {
+      return std::array{v[I]...};
+    }(methods, std::make_index_sequence<methods.size()>{});
+  }
+}
+
+template <typename Owner, typename Derived, std::meta::info Member, Qualifier Q,
+          typename Return, typename... Args>
+struct Method;
+
+template <typename Owner, typename Derived, std::meta::info Member,
+          typename Return, typename... Args>
+struct Method<Owner, Derived, Member, NoQualifier, Return, Args...> {
+  Return operator()(Args... args) {
+    Derived* self = static_cast<Derived*>(reinterpret_cast<Owner*>(this));
+    return (self->unwrap().[:Member:])(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Owner, typename Derived, std::meta::info Member,
+          typename Return, typename... Args>
+struct Method<Owner, Derived, Member, ConstQualifier, Return, Args...> {
+  Return operator()(Args... args) const {
+    const Derived* self =
+        static_cast<const Derived*>(reinterpret_cast<const Owner*>(this));
+    return (self->unwrap().[:Member:])(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Owner, typename Derived, std::meta::info Member,
+          typename Return, typename... Args>
+struct Method<Owner, Derived, Member, VolatileQualifier, Return, Args...> {
+  Return operator()(Args... args) volatile {
+    volatile Derived* self =
+        static_cast<volatile Derived*>(reinterpret_cast<volatile Owner*>(this));
+    return (self->unwrap().[:Member:])(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Owner, typename Derived, std::meta::info Member,
+          typename Return, typename... Args>
+struct Method<Owner, Derived, Member, NoexceptQualifier, Return, Args...> {
+  Return operator()(Args... args) noexcept {
+    Derived* self = static_cast<Derived*>(reinterpret_cast<Owner*>(this));
+    return (self->unwrap().[:Member:])(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Owner, typename Derived, std::meta::info Member,
+          typename Return, typename... Args>
+struct Method<Owner, Derived, Member, ConstVolatileQualifier, Return, Args...> {
+  Return operator()(Args... args) const volatile {
+    const volatile Derived* self = static_cast<const volatile Derived*>(
+        reinterpret_cast<const volatile Owner*>(this));
+    return (self->unwrap().[:Member:])(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Owner, typename Derived, std::meta::info Member,
+          typename Return, typename... Args>
+struct Method<Owner, Derived, Member, ConstNoexceptQualifier, Return, Args...> {
+  Return operator()(Args... args) const noexcept {
+    const Derived* self =
+        static_cast<const Derived*>(reinterpret_cast<const Owner*>(this));
+    return (self->unwrap().[:Member:])(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Owner, typename Derived, std::meta::info Member,
+          typename Return, typename... Args>
+struct Method<Owner, Derived, Member, VolatileNoexceptQualifier, Return,
+              Args...> {
+  Return operator()(Args... args) volatile noexcept {
+    volatile Derived* self =
+        static_cast<volatile Derived*>(reinterpret_cast<volatile Owner*>(this));
+    return (self->unwrap().[:Member:])(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Owner, typename Derived, std::meta::info Member,
+          typename Return, typename... Args>
+struct Method<Owner, Derived, Member, ConstVolatileNoexceptQualifier, Return,
+              Args...> {
+  Return operator()(Args... args) const volatile noexcept {
+    const volatile Derived* self = static_cast<const volatile Derived*>(
+        reinterpret_cast<const volatile Owner*>(this));
+    return (self->unwrap().[:Member:])(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Owner, typename Derived, std::meta::info Member>
+consteval auto method_of() {
+  std::vector<std::meta::info> params{};
+  params.push_back(^^Owner);
+  params.push_back(^^Derived);
+  params.push_back(std::meta::reflect_constant(Member));
+  params.push_back(std::meta::reflect_constant(qualifier_of<Member>()));
+  params.push_back(std::meta::return_type_of(Member));
+  for (auto param : parameter_types_of<Member>()) {
+    params.push_back(param);
+  }
+  return std::meta::substitute(^^Method, params);
+}
+
+template <typename Derived, std::meta::info Member>
+struct MethodWrapper {
+  struct Inner;
+
+  static constexpr auto members_v = std::array{std::meta::data_member_spec(
+      method_of<Inner, Derived, Member>(), {
+                                               .name = id_of<Member>(),
+                                               .no_unique_address = true,
+                                           })};
+
+  consteval { std::meta::define_aggregate(^^Inner, members_v); }
+
+  static_assert(std::meta::is_standard_layout_type(^^Inner),
+                "Type must be standard layout");
+  static_assert(members_v.size() == 1, "There should be exactly one member");
+};
+
 }  // namespace detail
 
 template <typename T,
           auto Members = detail::gnsdm_of<^^std::remove_cvref_t<T>>(),
-          typename IS = decltype(std::make_index_sequence<Members.size()>{})>
+          typename IS = decltype(std::make_index_sequence<Members.size()>{}),
+          auto Methods = detail::methods_of<^^std::remove_cvref_t<T>>(),
+          typename MIS = decltype(std::make_index_sequence<Methods.size()>{})>
 struct Getter;
 
-template <typename T, auto Members, std::size_t... I>
-struct Getter<T, Members, std::index_sequence<I...>>
-    : detail::GetterWrapper<Getter<T, Members, std::index_sequence<I...>>,
-                            Members[I]>::Inner... {
+template <typename T, auto Members, std::size_t... I, auto Methods,
+          std::size_t... MI>
+struct Getter<T, Members, std::index_sequence<I...>, Methods,
+              std::index_sequence<MI...>>
+    : detail::GetterWrapper<Getter<T, Members, std::index_sequence<I...>,
+                                   Methods, std::index_sequence<MI...>>,
+                            Members[I]>::Inner...,
+      detail::MethodWrapper<Getter<T, Members, std::index_sequence<I...>,
+                                   Methods, std::index_sequence<MI...>>,
+                            Methods[MI]>::Inner... {
   T __raw;
 
   T& unwrap() noexcept { return __raw; }
@@ -554,13 +761,21 @@ struct Getter<T, Members, std::index_sequence<I...>>
 
 template <typename T,
           auto Members = detail::snsdm_of<^^std::remove_cvref_t<T>>(),
-          typename IS = decltype(std::make_index_sequence<Members.size()>{})>
+          typename IS = decltype(std::make_index_sequence<Members.size()>{}),
+          auto Methods = detail::methods_of<^^std::remove_cvref_t<T>>(),
+          typename MIS = decltype(std::make_index_sequence<Methods.size()>{})>
 struct Setter;
 
-template <typename T, auto Members, std::size_t... I>
-struct Setter<T, Members, std::index_sequence<I...>>
-    : detail::SetterWrapper<Setter<T, Members, std::index_sequence<I...>>,
-                            Members[I]>::Inner... {
+template <typename T, auto Members, std::size_t... I, auto Methods,
+          std::size_t... MI>
+struct Setter<T, Members, std::index_sequence<I...>, Methods,
+              std::index_sequence<MI...>>
+    : detail::SetterWrapper<Setter<T, Members, std::index_sequence<I...>,
+                                   Methods, std::index_sequence<MI...>>,
+                            Members[I]>::Inner...,
+      detail::MethodWrapper<Setter<T, Members, std::index_sequence<I...>,
+                                   Methods, std::index_sequence<MI...>>,
+                            Methods[MI]>::Inner... {
   T __raw;
 
   T& unwrap() noexcept { return __raw; }
@@ -571,19 +786,27 @@ template <typename T,
           auto GMembers = detail::gnsdm_of<^^std::remove_cvref_t<T>>(),
           typename GIS = decltype(std::make_index_sequence<GMembers.size()>{}),
           auto SMembers = detail::snsdm_of<^^std::remove_cvref_t<T>>(),
-          typename SIS = decltype(std::make_index_sequence<SMembers.size()>{})>
+          typename SIS = decltype(std::make_index_sequence<SMembers.size()>{}),
+          auto Methods = detail::methods_of<^^std::remove_cvref_t<T>>(),
+          typename MIS = decltype(std::make_index_sequence<Methods.size()>{})>
 struct Accessor;
 
 template <typename T, auto GMembers, std::size_t... GI, auto SMembers,
-          std::size_t... SI>
+          std::size_t... SI, auto Methods, std::size_t... MI>
 struct Accessor<T, GMembers, std::index_sequence<GI...>, SMembers,
-                std::index_sequence<SI...>>
+                std::index_sequence<SI...>, Methods, std::index_sequence<MI...>>
     : detail::GetterWrapper<Accessor<T, GMembers, std::index_sequence<GI...>,
-                                     SMembers, std::index_sequence<SI...>>,
+                                     SMembers, std::index_sequence<SI...>,
+                                     Methods, std::index_sequence<MI...>>,
                             GMembers[GI]>::Inner...,
       detail::SetterWrapper<Accessor<T, GMembers, std::index_sequence<GI...>,
-                                     SMembers, std::index_sequence<SI...>>,
-                            SMembers[SI]>::Inner... {
+                                     SMembers, std::index_sequence<SI...>,
+                                     Methods, std::index_sequence<MI...>>,
+                            SMembers[SI]>::Inner...,
+      detail::MethodWrapper<Accessor<T, GMembers, std::index_sequence<GI...>,
+                                     SMembers, std::index_sequence<SI...>,
+                                     Methods, std::index_sequence<MI...>>,
+                            Methods[MI]>::Inner... {
   T __raw;
 
   T& unwrap() noexcept { return __raw; }
