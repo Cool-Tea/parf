@@ -588,6 +588,11 @@ consteval auto parameter_types_of() {
     if (std::meta::is_volatile(param)) {
       param_type = std::meta::add_volatile(param_type);
     }
+    if (std::meta::is_lvalue_reference_qualified(param)) {
+      param_type = std::meta::add_lvalue_reference(param_type);
+    } else if (std::meta::is_rvalue_reference_qualified(param)) {
+      param_type = std::meta::add_rvalue_reference(param_type);
+    }
     param_types.push_back(param_type);
   }
   return param_types;
