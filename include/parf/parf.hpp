@@ -151,6 +151,14 @@ struct RenameSetter {
   consteval RenameSetter(const char (&str)[N]) : name(str) {}
 };
 
+enum class ForwardMode {
+  NoForward,
+  Forward,
+};
+
+constexpr ForwardMode NoForward = ForwardMode::NoForward;
+constexpr ForwardMode Forward = ForwardMode::Forward;
+
 namespace detail {
 
 template <std::meta::info Info>
@@ -594,16 +602,24 @@ consteval auto members_of() {
 
 template <std::meta::info Info>
 consteval auto methods_of() {
-  constexpr auto methods = std::define_static_array([]() consteval {
+  constexpr auto underlying = dealias<Info>();
+  constexpr auto default_forward =
+      fetch_mono_annotation<underlying, ForwardMode>().value_or(NoForward);
+  constexpr auto methods = std::define_static_array([&]() consteval {
     std::vector<std::meta::info> result{};
-    for (auto member : members_of<Info>()) {
-      if (std::meta::is_function(member) &&
-          !std::meta::is_special_member_function(member) &&
-          !std::meta::is_constructor(member) &&
-          !std::meta::is_conversion_function(member) &&
-          !std::meta::is_operator_function(member) &&
-          !std::meta::is_literal_operator(member)) {
-        result.push_back(member);
+    template for (constexpr auto member : members_of<Info>()) {
+      if constexpr (std::meta::is_function(member) &&
+                    !std::meta::is_special_member_function(member) &&
+                    !std::meta::is_constructor(member) &&
+                    !std::meta::is_conversion_function(member) &&
+                    !std::meta::is_operator_function(member) &&
+                    !std::meta::is_literal_operator(member)) {
+        constexpr auto forward =
+            fetch_mono_annotation<member, ForwardMode>().value_or(
+                default_forward);
+        if constexpr (forward == Forward) {
+          result.push_back(member);
+        }
       }
     }
     return result;

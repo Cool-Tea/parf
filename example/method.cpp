@@ -1,13 +1,16 @@
 #include <print>
 #include "parf/parf.hpp"
 
-struct MyStruct {
+struct[[= parf::Forward]] MyStruct {
   int x;
   double y;
   MyStruct(int x, double y) : x(x), y(y) {}
   ~MyStruct() { std::println("MyStruct destroyed"); }
 
   void foo() { std::println("foo called"); }
+  [[= parf::NoForward]] void foo(double) {
+    std::println("foo overload called");
+  }
   void bar(int) { std::println("bar called"); }
 
  private:
